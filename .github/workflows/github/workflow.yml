@@ -1,0 +1,48 @@
+name: Deploy to AWS ECS Fargate
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+    
+    - name: Login to AWS ECR
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        push: true
+        tags: <your-ecr-repo-url>:latest
+    
+    - name: Install and configure AWS CLI
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y awscli
+        echo ${{ secrets.AWS_ACCESS_KEY_ID }} >> aws_access_key
+        echo ${{ secrets.AWS_SECRET_ACCESS_KEY }} >> aws_secret_access_key
+        echo ${{ secrets.AWS_REGION }} >> aws_region
+        aws configure set aws_access_key_id $(cat aws_access_key)
+        aws configure set aws_secret_access_key $(cat aws_secret_access_key)
+        aws configure set region $(cat aws_region)
+    
+    - name: Deploy to AWS ECS Fargate
+      run: |
+        export ECR_REGISTRY=<your-ecr-repo-url>
+        export IMAGE_TAG=$(echo ${{ env.GITHUB_SHA }} | cut -c1-7)
+        export TASK_FAMILY=<your-ecs-task-family>
+        export SERVICE_NAME=<your-ecs-service-name>
+        
+        export TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition $TASK_FAMILY | jq --arg IMAGE_TAG $IMAGE_TAG '.taskDefinition | .containerDefinitions[].image |= sub(":latest"; ":" + $IMAGE_TAG) | .taskDefinitionArn = null')
+        echo $TASK_DEFINITION > task_definition.json
+        export TASK_DEFINITION_REVISION=$(aws ecs register-task-definition --cli-input-json file://task_definition.json | jq '.taskDefinition.taskDefinitionArn')
+        
+        aws ecs update-service --service $SERVICE_NAME --cluster <your-ecs-cluster> --task-definition $TASK_DEFINITION_REVISION
